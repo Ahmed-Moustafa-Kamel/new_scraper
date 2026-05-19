@@ -2,12 +2,16 @@ name: News Scraper
 
 on:
   schedule:
-    - cron: '23 0 * * *'
+    - cron: '35 0 * * *'
   workflow_dispatch:
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    
+    # 1. FIXED: Added write permissions so GitHub can update your repo files
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
@@ -30,9 +34,15 @@ jobs:
         run: python extractor.py
 
       - name: Commit CSV to repo
+        # 2. FIXED: Wrapped commit in a safety check and targeted your master branch
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add articles.csv
-          git commit -m "update articles.csv - $(date '+%Y-%m-%d %H:%M')"
-          git push
+          if ! git diff --quiet --cached; then
+            git commit -m "update articles.csv - $(date '+%Y-%m-%d %H:%M')"
+            git pull --rebase origin master
+            git push origin master
+          else
+            echo "No new changes found in articles.csv. Skipping commit."
+          fi
