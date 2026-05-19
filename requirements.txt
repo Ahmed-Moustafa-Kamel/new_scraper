@@ -1,0 +1,12 @@
+playwright==1.43.0
+beautifulsoup4
+readability-lxml
+chardet
+pandas
+python-dateutil
+requests
+urllib3
+lxml
+boto3
+feedparser
+playwright-stealth==1.0.6
