@@ -2,8 +2,8 @@ name: News Scraper
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # runs every day at 6am UTC
-  workflow_dispatch:       # allows manual trigger from GitHub
+    - cron: '23 0 * * *'
+  workflow_dispatch:
 
 jobs:
   scrape:
@@ -19,8 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Install Playwright browsers
         run: |
@@ -28,16 +27,12 @@ jobs:
           playwright install-deps chromium
 
       - name: Run scraper
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-          S3_BUCKET: ${{ secrets.S3_BUCKET }}
-        run: |
-          python extractor.py
+        run: python extractor.py
 
-      - name: Upload CSV as artifact (backup)
-        uses: actions/upload-artifact@v3
-        with:
-          name: scraped-articles
-          path: articles.csv
+      - name: Commit CSV to repo
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add articles.csv
+          git commit -m "update articles.csv - $(date '+%Y-%m-%d %H:%M')"
+          git push
