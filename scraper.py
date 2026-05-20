@@ -1,12 +1,11 @@
-import boto3
 from playwright.sync_api import sync_playwright
+from playwright_stealth import Stealth
 from urllib.parse import urljoin, quote, unquote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import pandas as pd
 
 websites = {
-    # ── Original websites ──────────────────────────────────────────────────────
     "youm7": {
         "base_url": "https://www.youm7.com/Home/Search?allwords=",
         "pattern": r"/story/",
@@ -27,8 +26,6 @@ websites = {
         "pattern": r"/\d{6,}",
         "tier": "tier1",
     },
-
-    # ── Tier-1 websites from new list ─────────────────────────────────────────
     "ahram_english": {
         "base_url": "https://english.ahram.org.eg/UI/Front/Search.aspx?Text=",
         "pattern": r"/NewsContent/\d+/\d+/\d+/",
@@ -81,7 +78,7 @@ websites = {
     },
     "ictbusiness": {
         "base_url": "https://ictbusiness.org/?s=",
-        "pattern": r"/[^\s/]{10,}",          # slugified Arabic/Latin article paths
+        "pattern": r"/[^\s/]{10,}",
         "tier": "tier1",
     },
     "techknowledge": {
@@ -163,23 +160,38 @@ websites = {
 
 
 def _scrape_one_query(query: str) -> list:
-    """Scrape all sites for a single query. Each query gets its own browser."""
     rows = []
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-
-        # FIX: Create a context that ignores SSL certificate errors
-        context = browser.new_context(ignore_https_errors=True)
+    with Stealth().use_sync(sync_playwright()) as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+            ]
+        )
+        context = browser.new_context(
+            ignore_https_errors=True,
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+            locale="ar-EG",
+        )
 
         for site, config in websites.items():
             print(f"  [{query}] Scraping {site}...")
             url = f"{config['base_url']}{quote(query, safe='')}"
 
-            # Use the context to create the page
             page = context.new_page()
             try:
                 page.goto(url, timeout=30000)
+                page.wait_for_selector("body", timeout=10000)
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight / 4)")
+                page.wait_for_timeout(2000)
             except Exception as e:
                 print(f"  [{query}] TIMEOUT on {site}: {e}")
                 page.close()
@@ -201,27 +213,21 @@ def _scrape_one_query(query: str) -> list:
             for link in found_links:
                 rows.append({
                     "query": query,
-                    "site": site,
-                    "tier": config["tier"],
-                    "link": link,
+                    "site":  site,
+                    "tier":  config["tier"],
+                    "link":  link,
                 })
 
             print(f"  [{query}] {site} — {len(found_links)} links")
             page.close()
 
-        # Close the context and browser
         context.close()
         browser.close()
 
     return rows
 
 
-def scrape_links(queries, max_workers: int = 3) -> pd.DataFrame:
-    """
-    Accept a single query string or a list of queries.
-    Queries run in parallel (each in its own browser/thread).
-    max_workers: how many queries run simultaneously.
-    """
+def scrape_links(queries, max_workers: int = 2) -> pd.DataFrame:
     if isinstance(queries, str):
         queries = [queries]
 
@@ -240,32 +246,24 @@ def scrape_links(queries, max_workers: int = 3) -> pd.DataFrame:
                 print(f"\n[{query}] FAILED: {e}")
 
     df = pd.DataFrame(all_rows, columns=["query", "site", "tier", "link"])
-    # Drop duplicate links across queries
     df = df.drop_duplicates(subset="link").reset_index(drop=True)
     print(f"\nTotal unique links: {len(df)}")
     return df
 
 
 if __name__ == "__main__":
-    queries = [
-    "orange", "اورنج", "فودافون", "vodafone", "اتصالات", "etisalat",
-    "اتصالات / اي اند", "المصرية للاتصالات", "we", "telecom egypt",
-    "قطاع الاتصالات", "الحكومة المصرية", "وزير الاستثمار المصري",
-    "البنك المركزي", "central bank", "وزير المالية", "رئيس الوزراء",
-    "ريادة الأعمال", "entrepreneurship", "الابتكار و التكنولوجيا",
-    "تنظيم الاتصالات", "ntra", "البنك الدولي", "world bank",
-    "البورصة المصرية", "egx"]
-    df = scrape_links(queries, max_workers=5)
-    # utf-8-sig writes a BOM at the start of the file — this tells Excel
-    # (and most Windows viewers) to read it as UTF-8 instead of defaulting
-    # to Windows-1252, which is what garbles Arabic into Ø§ØªØµØ§Ù„Ø§Øª.
-    df.to_csv("scraped_links.csv", index=False, encoding="utf-8-sig")
+    import os
 
-    s3 = boto3.client(
-    's3',
-    aws_access_key_id='AKIA3AO4DR3HD4LHQI6P',
-    aws_secret_access_key='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',
-    region_name='eu-north-1'
-    )
-    s3.upload_file('scraped_links.csv', 'my-scraping-bucket1', 'scraped_links.csv')
-    print("✅ File uploaded to S3!")
+    queries = [
+        "orange", "اورنج", "فودافون", "vodafone", "اتصالات", "etisalat",
+        "اتصالات / اي اند", "المصرية للاتصالات", "we", "telecom egypt",
+        "قطاع الاتصالات", "الحكومة المصرية", "وزير الاستثمار المصري",
+        "البنك المركزي", "central bank", "وزير المالية", "رئيس الوزراء",
+        "ريادة الأعمال", "entrepreneurship", "الابتكار و التكنولوجيا",
+        "تنظيم الاتصالات", "ntra", "البنك الدولي", "world bank",
+        "البورصة المصرية", "egx",
+    ]
+
+    df = scrape_links(queries, max_workers=2)
+    df.to_csv("scraped_links.csv", index=False, encoding="utf-8-sig")
+    print("✅ Saved scraped_links.csv")

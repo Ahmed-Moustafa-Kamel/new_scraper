@@ -1,4 +1,4 @@
-import boto3
+import os
 import warnings
 import requests
 from requests.adapters import HTTPAdapter
@@ -14,7 +14,6 @@ from dateutil import parser as dateparser
 
 from scraper import scrape_links
 
-# Suppress only the single InsecureRequestWarning from urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -44,7 +43,7 @@ def make_session() -> requests.Session:
 SESSION = make_session()
 
 
-# ── Date normalizer ──────────────────────────────────────────────────────────
+# ── Date normalizer ───────────────────────────────────────────────────────────
 def parse_date(raw: str) -> str:
     if not raw:
         return ""
@@ -54,7 +53,7 @@ def parse_date(raw: str) -> str:
         return ""
 
 
-# ── Metadata helpers ───────────────────────────────────────────────────────────
+# ── Metadata helpers ──────────────────────────────────────────────────────────
 def get_meta(soup: BeautifulSoup, *names) -> str:
     for name in names:
         tag = (
@@ -79,14 +78,16 @@ def extract_metadata(soup: BeautifulSoup, url: str) -> dict:
 
 
 # ── Noise removal ─────────────────────────────────────────────────────────────
-NOISE_TAGS = ["script", "style", "noscript", "iframe", "nav", "footer",
-              "header", "aside", "form", "button", "figure", "figcaption",
-              "svg", "ads", "advertisement"]
+NOISE_TAGS = [
+    "script", "style", "noscript", "iframe", "nav", "footer",
+    "header", "aside", "form", "button", "figure", "figcaption",
+    "svg", "ads", "advertisement",
+]
 
 NOISE_CLASSES = re.compile(
     r"(comment|share|social|related|sidebar|widget|breadcrumb|"
     r"newsletter|popup|banner|ad[-_]|sponsor|tag|pagination)",
-    re.I
+    re.I,
 )
 
 def remove_noise(soup: BeautifulSoup) -> BeautifulSoup:
@@ -109,15 +110,12 @@ def clean_text(raw: str) -> str:
     return "\n".join(lines)
 
 
-# ── Arabic text cleaning (display-safe: only strips HTML tags + extra whitespace)
-# NOTE: Do NOT normalize أ→ا or ى→ي here — that corrupts titles and proper nouns.
-#       Keep that normalization only in a separate search/matching pipeline.
 def clean_arabic(text: str) -> str:
     if not text:
         return ""
-    text = re.sub(r'<.*?>', ' ', text)   # strip any leftover HTML tags
-    text = re.sub(r'[ـ]+', '', text)     # remove tatweel (kashida) stretching
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'<.*?>',  ' ', text)
+    text = re.sub(r'[ـ]+',   '',  text)
+    text = re.sub(r'\s+',    ' ', text).strip()
     return text
 
 
@@ -137,25 +135,23 @@ def extract_clean_text(url: str) -> dict:
         encoding = declared
     html = response.content.decode(encoding, errors="replace")
 
-    doc = Document(html)
-    clean_html = doc.summary()
-
-    full_soup = BeautifulSoup(html, "html.parser")
+    doc          = Document(html)
+    clean_html   = doc.summary()
+    full_soup    = BeautifulSoup(html,       "html.parser")
     article_soup = BeautifulSoup(clean_html, "html.parser")
 
     remove_noise(article_soup)
-
     raw_text = article_soup.get_text(separator="\n")
-    text = clean_text(raw_text)
+    text     = clean_text(raw_text)
 
     if len(text) < 200:
         remove_noise(full_soup)
         for tag in full_soup(["p", "h1", "h2", "h3", "h4", "blockquote"]):
             tag.insert_after("\n")
         raw_text = full_soup.get_text(separator="\n")
-        text = clean_text(raw_text)
+        text     = clean_text(raw_text)
 
-    metadata = extract_metadata(full_soup, url)
+    metadata   = extract_metadata(full_soup, url)
     word_count = len(text.split())
 
     return {
@@ -168,7 +164,6 @@ def extract_clean_text(url: str) -> dict:
 
 # ── Worker function for threading ─────────────────────────────────────────────
 def process_row(args):
-    # FIX: unpack 'tier' which is now present in scraped_df
     idx, total, site, tier, url = args
     print(f"[{idx}/{total}] {site} ({tier}) — {url[:70]}")
 
@@ -183,7 +178,7 @@ def process_row(args):
 
     return {
         "site":         site,
-        "tier":         tier,           # FIX: now saved to output CSV
+        "tier":         tier,
         "url":          m["url"],
         "title":        clean_arabic(m["title"]),
         "author":       m["author"],
@@ -202,51 +197,46 @@ def process_row(args):
 if __name__ == "__main__":
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    MAX_WORKERS = 10  # tune this — more = faster but more load on servers
+    SCRAPER_WORKERS  = int(os.environ.get("SCRAPER_WORKERS",  "2"))
+    EXTRACTOR_WORKERS = int(os.environ.get("EXTRACTOR_WORKERS", "10"))
+    FILTER_DAYS      = int(os.environ.get("FILTER_DAYS",      "30"))
 
     queries = [
-    "orange", "اورنج", "فودافون", "vodafone", "اتصالات", "etisalat",
-    "اتصالات / اي اند", "المصرية للاتصالات", "we", "telecom egypt",
-    "قطاع الاتصالات", "الحكومة المصرية", "وزير الاستثمار المصري",
-    "البنك المركزي", "central bank", "وزير المالية", "رئيس الوزراء",
-    "ريادة الأعمال", "entrepreneurship", "الابتكار و التكنولوجيا",
-    "تنظيم الاتصالات", "ntra", "البنك الدولي", "world bank",
-    "البورصة المصرية", "egx"]
+        "orange", "اورنج", "فودافون", "vodafone", "اتصالات", "etisalat",
+        "اتصالات / اي اند", "المصرية للاتصالات", "we", "telecom egypt",
+        "قطاع الاتصالات", "الحكومة المصرية", "وزير الاستثمار المصري",
+        "البنك المركزي", "central bank", "وزير المالية", "رئيس الوزراء",
+        "ريادة الأعمال", "entrepreneurship", "الابتكار و التكنولوجيا",
+        "تنظيم الاتصالات", "ntra", "البنك الدولي", "world bank",
+        "البورصة المصرية", "egx",
+    ]
 
-    scraped_df = scrape_links(queries, max_workers=5)
-    total = len(scraped_df)
-    print(f"\nExtracting {total} articles with {MAX_WORKERS} threads...\n")
+    # ── Step 1: Scrape links ──────────────────────────────────────────────────
+    scraped_df = scrape_links(queries, max_workers=SCRAPER_WORKERS)
+    total      = len(scraped_df)
+    print(f"\nExtracting {total} articles with {EXTRACTOR_WORKERS} threads...\n")
 
-    # FIX: include 'tier' in the task tuple
+    # ── Step 2: Extract article text ─────────────────────────────────────────
     tasks = [
         (i + 1, total, row["site"], row["tier"], row["link"])
         for i, (_, row) in enumerate(scraped_df.iterrows())
     ]
 
     rows = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    with ThreadPoolExecutor(max_workers=EXTRACTOR_WORKERS) as executor:
         futures = {executor.submit(process_row, task): task for task in tasks}
         for future in as_completed(futures):
             rows.append(future.result())
 
     df = pd.DataFrame(rows)
 
-    # ── Filter: keep only articles from the last 30 days ──────────────────
-    cutoff = datetime.utcnow() - timedelta(days=30)
+    # ── Step 3: Filter by date ────────────────────────────────────────────────
     df["published_at"] = pd.to_datetime(df["published_at"], errors="coerce")
     before = len(df)
-    # df = df[df["published_at"] >= cutoff]      # uncomment to enable filtering
+    # df = df[df["published_at"] >= datetime.utcnow() - timedelta(days=FILTER_DAYS)]
     df["published_at"] = df["published_at"].dt.strftime("%Y-%m-%d")
     print(f"  Filtered {before - len(df)} old articles — {len(df)} remaining")
 
+    # ── Step 4: Save CSV ──────────────────────────────────────────────────────
     df.to_csv("articles.csv", index=False, encoding="utf-8-sig")
-    print(f"\nSaved {len(df)} rows to articles.csv")
-
-    s3 = boto3.client(
-    's3',
-    aws_access_key_id='AKIA3AO4DR3HD4LHQI6P',
-    aws_secret_access_key='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',
-    region_name='eu-north-1'
-    )
-    s3.upload_file('articles.csv', 'my-scraping-bucket1', 'articles.csv')
-    print("✅ File uploaded to S3!")
+    print(f"\n✅ Saved {len(df)} rows to articles.csv")

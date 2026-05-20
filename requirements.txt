@@ -7,6 +7,5 @@ python-dateutil
 requests
 urllib3
 lxml
-boto3
 feedparser
-playwright-stealth==1.0.6
+playwright-stealth
