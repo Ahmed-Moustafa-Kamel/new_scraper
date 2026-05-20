@@ -3,7 +3,7 @@ name: Run Almasry Scraper Trial
 on:
   workflow_dispatch: # Allows you to manually click "Run workflow" from GitHub UI
   schedule:
-    - cron: '0 8 * * *' # Optional: Automatically runs daily at 8:00 AM UTC
+    - cron: '0 8 * * *' # Automatically runs daily at 8:00 AM UTC
 
 jobs:
   run-scraper:
@@ -16,8 +16,8 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-python-version: '3.11'
-        cache: 'pip' # Speeds up subsequent runs
+        python-version: '3.11' # Fixed typo here from 'python-python-version'
+        cache: 'pip' 
 
     - name: Install dependencies
       run: |
