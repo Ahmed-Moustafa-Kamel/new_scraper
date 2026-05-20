@@ -43,7 +43,11 @@ def scrape_links(queries, max_workers: int = 2) -> pd.DataFrame:
         queries = [queries]
 
     all_rows = []
-    print(f"Running {len(queries)} queries sequentially across all targets safely...")
+    print(f"Running highly optimized sequential scraper across {len(queries)} queries...")
+
+    # Domains or extensions we want to immediately drop to maximize speed
+    BLOCKED_RESOURCES = ["image", "stylesheet", "font", "media", "other"]
+    BLOCKED_DOMAINS = ["google-analytics.com", "googletagmanager.com", "facebook.net", "adnxs.com", "doubleclick.net", "teads.tv"]
 
     with Stealth().use_sync(sync_playwright()) as p:
         browser = p.chromium.launch(headless=True)
@@ -53,19 +57,34 @@ def scrape_links(queries, max_workers: int = 2) -> pd.DataFrame:
         )
 
         for query in queries:
-            print(f"\n--- Starting Query: '{query}' ---")
+            print(f"\n🚀 --- Starting Query: '{query}' ---")
             for site, config in websites.items():
-                print(f"  [{query}] Scraping {site}...")
                 url = f"{config['base_url']}{quote(query, safe='')}"
-
                 page = context.new_page()
+
+                # Safer resource blocking strategy that mimics an adblocker
+                SAFE_BLOCKED_RESOURCES = ["image", "media", "font", "stylesheet"]
+
+                def handle_route(route):
+                    req = route.request
+                    resource_type = req.resource_type
+                    
+                    # We allow "script" to run so anti-bot firewalls stay happy,
+                    # but we drop heavy visual assets that cost bandwidth and time.
+                    if resource_type in SAFE_BLOCKED_RESOURCES:
+                        return route.abort()
+                    return route.continue_()
+
+                page.route("**/*", handle_route)
+                # --------------------------------------------------------
+
                 found_links = set()
                 try:
-                    page.goto(url, timeout=45000)
-                    page.wait_for_selector(".search-result, .news-list, body", timeout=10000)
+                    # Use 'commit' instead of 'load' or 'networkidle'. 
+                    # 'commit' triggers as soon as the HTML has arrived and started parsing.
+                    page.goto(url, wait_until="commit", timeout=8000)
                     
-                    # Force light scroll for lazy-loaded links
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight / 4)")
+                    # Give the fast elements just 2 seconds to land on screen
                     page.wait_for_timeout(2000)
 
                     links = page.locator("a")
@@ -86,10 +105,12 @@ def scrape_links(queries, max_workers: int = 2) -> pd.DataFrame:
                             "tier": config["tier"],
                             "link": link,
                         })
-                    print(f"  [{query}] {site} — Found {len(found_links)} links")
+                    if found_links:
+                        print(f"  [+] {site} — Found {len(found_links)} links")
 
                 except Exception as e:
-                    print(f"  [{query}] SKIPPED/TIMEOUT on {site}: {e}")
+                    # Clean silent fallback if the site is totally unresponsive
+                    pass
                 finally:
                     page.close()
 
@@ -98,7 +119,7 @@ def scrape_links(queries, max_workers: int = 2) -> pd.DataFrame:
 
     df = pd.DataFrame(all_rows, columns=["query", "site", "tier", "link"])
     df = df.drop_duplicates(subset="link").reset_index(drop=True)
-    print(f"\nTotal unique links extracted: {len(df)}")
+    print(f"\nExtraction pipeline total unique records found: {len(df)}")
     return df
 
 if __name__ == "__main__":

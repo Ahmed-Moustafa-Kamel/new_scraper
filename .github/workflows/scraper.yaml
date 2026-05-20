@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120 
 
+    # 🛑 ADD THESE LINES TO GRANT WRITE ACCESS 🛑
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
