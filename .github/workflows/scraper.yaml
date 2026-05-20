@@ -2,14 +2,14 @@ name: News Scraper
 
 on:
   schedule:
-    - cron: '0 6 * * *'    # every day at 6am UTC (8am Cairo)
-    - cron: '0 14 * * *'   # every day at 2pm UTC (4pm Cairo)
+    - cron: '0 6 * * *'    # every day at 6am UTC = 8am Cairo
+    - cron: '0 14 * * *'   # every day at 2pm UTC = 4pm Cairo
   workflow_dispatch:         # manual trigger from GitHub UI
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 120     # stop after 2 hours max
 
     steps:
       - name: Checkout code
@@ -40,6 +40,7 @@ jobs:
           SCRAPER_WORKERS: "3"
           EXTRACTOR_WORKERS: "10"
           FILTER_DAYS: "30"
+          OUTPUT_FILE: "articles.csv"
         run: python extractor.py
 
       - name: Commit articles.csv to repo

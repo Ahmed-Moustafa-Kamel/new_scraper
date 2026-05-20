@@ -1,4 +1,5 @@
 playwright==1.43.0
+playwright-stealth
 beautifulsoup4
 readability-lxml
 chardet
@@ -8,4 +9,3 @@ requests
 urllib3
 lxml
 feedparser
-playwright-stealth

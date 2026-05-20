@@ -160,17 +160,12 @@ websites = {
 
 
 def _scrape_one_query(query: str) -> list:
+    """Scrape all sites for a single query using the proven stealth approach."""
     rows = []
 
+    # ── Exact approach from working test code ─────────────────────────────────
     with Stealth().use_sync(sync_playwright()) as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-            ]
-        )
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             ignore_https_errors=True,
             user_agent=(
@@ -178,8 +173,6 @@ def _scrape_one_query(query: str) -> list:
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
-            viewport={"width": 1280, "height": 800},
-            locale="ar-EG",
         )
 
         for site, config in websites.items():
@@ -188,16 +181,24 @@ def _scrape_one_query(query: str) -> list:
 
             page = context.new_page()
             try:
-                page.goto(url, timeout=30000)
-                page.wait_for_selector("body", timeout=10000)
+                page.goto(url, timeout=60000)
+
+                # Wait for search results structure to load in DOM
+                page.wait_for_selector(
+                    ".search-result, .news-list, body",
+                    timeout=15000,
+                )
+
+                # Scroll to trigger lazy-loaded elements
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight / 4)")
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(4000)
+
             except Exception as e:
                 print(f"  [{query}] TIMEOUT on {site}: {e}")
                 page.close()
                 continue
 
-            links = page.locator("a")
+            links      = page.locator("a")
             found_links = set()
 
             for i in range(links.count()):
@@ -205,9 +206,9 @@ def _scrape_one_query(query: str) -> list:
                 if href and re.search(config["pattern"], href):
                     if href.startswith("/"):
                         href = urljoin(page.url, href)
-                    parsed = href.split("?", 1)
-                    parsed[0] = quote(unquote(parsed[0]), safe="/:@")
-                    href = "?".join(parsed)
+                    parsed     = href.split("?", 1)
+                    parsed[0]  = quote(unquote(parsed[0]), safe="/:@")
+                    href       = "?".join(parsed)
                     found_links.add(href)
 
             for link in found_links:
@@ -228,6 +229,15 @@ def _scrape_one_query(query: str) -> list:
 
 
 def scrape_links(queries, max_workers: int = 2) -> pd.DataFrame:
+    """
+    Accept a single query string or a list of queries.
+    Queries run in parallel (each in its own browser/thread).
+
+    max_workers guidance:
+      GitHub Actions  → 3  (powerful free runners)
+      EC2 t3.small    → 2  (limited RAM)
+      Contabo VPS S   → 2  (limited RAM)
+    """
     if isinstance(queries, str):
         queries = [queries]
 
@@ -264,6 +274,7 @@ if __name__ == "__main__":
         "البورصة المصرية", "egx",
     ]
 
-    df = scrape_links(queries, max_workers=2)
+    workers = int(os.environ.get("SCRAPER_WORKERS", "2"))
+    df      = scrape_links(queries, max_workers=workers)
     df.to_csv("scraped_links.csv", index=False, encoding="utf-8-sig")
     print("✅ Saved scraped_links.csv")

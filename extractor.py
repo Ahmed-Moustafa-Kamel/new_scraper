@@ -1,5 +1,4 @@
 import os
-import warnings
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -11,6 +10,7 @@ import re
 import pandas as pd
 from datetime import datetime, timedelta
 from dateutil import parser as dateparser
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from scraper import scrape_links
 
@@ -26,7 +26,7 @@ def make_session() -> requests.Session:
         status_forcelist=[429, 500, 502, 503, 504],
     )
     adapter = HTTPAdapter(max_retries=retry)
-    session.mount("http://", adapter)
+    session.mount("http://",  adapter)
     session.mount("https://", adapter)
     session.headers.update({
         "User-Agent": (
@@ -162,7 +162,7 @@ def extract_clean_text(url: str) -> dict:
     }
 
 
-# ── Worker function for threading ─────────────────────────────────────────────
+# ── Worker ────────────────────────────────────────────────────────────────────
 def process_row(args):
     idx, total, site, tier, url = args
     print(f"[{idx}/{total}] {site} ({tier}) — {url[:70]}")
@@ -171,7 +171,14 @@ def process_row(args):
 
     if "error" in result:
         print(f"  [ERROR] {result['error']}")
-        return {"site": site, "tier": tier, "url": url, "error": result["error"]}
+        return {
+            "site": site, "tier": tier, "url": url,
+            "title": "", "author": "", "published_at": "",
+            "description": "", "site_name": "", "language": "",
+            "word_count": 0, "text": "",
+            "extracted_at": datetime.utcnow().isoformat(),
+            "error": result["error"],
+        }
 
     m = result["metadata"]
     print(f"  OK — {result['word_count']} words — {m['title'][:50]}")
@@ -195,11 +202,10 @@ def process_row(args):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    SCRAPER_WORKERS  = int(os.environ.get("SCRAPER_WORKERS",  "2"))
+    SCRAPER_WORKERS   = int(os.environ.get("SCRAPER_WORKERS",   "2"))
     EXTRACTOR_WORKERS = int(os.environ.get("EXTRACTOR_WORKERS", "10"))
-    FILTER_DAYS      = int(os.environ.get("FILTER_DAYS",      "30"))
+    FILTER_DAYS       = int(os.environ.get("FILTER_DAYS",       "30"))
 
     queries = [
         "orange", "اورنج", "فودافون", "vodafone", "اتصالات", "etisalat",
@@ -216,6 +222,10 @@ if __name__ == "__main__":
     total      = len(scraped_df)
     print(f"\nExtracting {total} articles with {EXTRACTOR_WORKERS} threads...\n")
 
+    if total == 0:
+        print("⚠️  No links found — exiting.")
+        exit(0)
+
     # ── Step 2: Extract article text ─────────────────────────────────────────
     tasks = [
         (i + 1, total, row["site"], row["tier"], row["link"])
@@ -230,13 +240,15 @@ if __name__ == "__main__":
 
     df = pd.DataFrame(rows)
 
-    # ── Step 3: Filter by date ────────────────────────────────────────────────
+    # ── Step 3: Filter by date (optional) ────────────────────────────────────
     df["published_at"] = pd.to_datetime(df["published_at"], errors="coerce")
     before = len(df)
+    # Uncomment to enable date filtering:
     # df = df[df["published_at"] >= datetime.utcnow() - timedelta(days=FILTER_DAYS)]
     df["published_at"] = df["published_at"].dt.strftime("%Y-%m-%d")
-    print(f"  Filtered {before - len(df)} old articles — {len(df)} remaining")
+    print(f"  Kept {len(df)} articles (filtered {before - len(df)} old)")
 
     # ── Step 4: Save CSV ──────────────────────────────────────────────────────
-    df.to_csv("articles.csv", index=False, encoding="utf-8-sig")
-    print(f"\n✅ Saved {len(df)} rows to articles.csv")
+    output_file = os.environ.get("OUTPUT_FILE", "articles.csv")
+    df.to_csv(output_file, index=False, encoding="utf-8-sig")
+    print(f"\n✅ Saved {len(df)} rows to {output_file}")
