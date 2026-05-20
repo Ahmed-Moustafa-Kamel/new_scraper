@@ -1,16 +1,16 @@
 import re
 from urllib.parse import quote
 from playwright.sync_api import sync_playwright
-from playwright_stealth import Stealth  # Changed this import
+from playwright_stealth import Stealth
 
 def test_almasry():
     query = "vodafone"
     url = f"https://www.almasryalyoum.com/news/search/?keyword={quote(query, safe='')}"
+    # Changed pattern to match both relative paths and absolute domains
     pattern = r"/news/details/\d+"
 
     print(f"Testing URL: {url}\n")
 
-    # Use the updated stealth pattern here
     with Stealth().use_sync(sync_playwright()) as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
@@ -22,40 +22,48 @@ def test_almasry():
         print("Loading page...")
         try:
             page.goto(url, timeout=60000)
-            # Wait extra time for JS/Cloudflare challenge to complete
-            page.wait_for_timeout(5000)
+            
+            # Wait for the search layout/results block to load in DOM
+            print("Waiting for search results structure...")
+            page.wait_for_selector(".search-result, .news-list, body", timeout=15000)
+            
+            # Scroll down slightly to trigger lazy-loaded elements
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight / 4)")
+            page.wait_for_timeout(4000)
 
             print(f"✅ Page title: {page.title()}")
             print(f"\n📄 Page URL after load: {page.url}")
-            print(f"\n📝 Page content preview (first 1000 chars):")
-            print(page.content()[:1000])
-            print("\n" + "="*60 + "\n")
-
+            
             # Check all links on the page
             links = page.locator("a")
             total_links = links.count()
-            print(f"Total links on page: {total_links}")
-
-            print("\n🔗 All links found (first 30):")
-            for i in range(min(30, total_links)):
-                href = links.nth(i).get_attribute("href")
-                if href:
-                    print(f"  {href}")
+            print(f"Total links found on page: {total_links}")
 
             print("\n🎯 Links matching pattern:")
             matched = 0
+            unique_links = set()
+
             for i in range(total_links):
                 href = links.nth(i).get_attribute("href")
                 if href and re.search(pattern, href):
-                    print(f"  ✅ {href}")
-                    matched += 1
+                    if href not in unique_links:
+                        unique_links.add(href)
+                        print(f"  ✅ {href}")
+                        matched += 1
 
-            print(f"\nTotal matched: {matched}")
+            print(f"\nTotal unique matched articles: {matched}")
+
+            if matched == 0 and total_links > 0:
+                print("\n⚠️ Found links, but none matched the pattern.")
+                print("Printing sample links to check structure changes:")
+                for i in range(min(15, total_links)):
+                    sample_href = links.nth(i).get_attribute("href")
+                    if sample_href:
+                        print(f"  - {sample_href}")
 
         except Exception as e:
             print(f"TIMEOUT or ERROR: {e}")
         finally:
-            # Ensures browser safely closes even on failure
             context.close()
             browser.close()
 
