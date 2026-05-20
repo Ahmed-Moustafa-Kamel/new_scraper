@@ -7,15 +7,17 @@ on:
 
 jobs:
   scrape:
-    runs-on: ubuntu-latest
+    # FIXED: Changed from ubuntu-latest to ubuntu-22.04 to fix the libasound2 crash
+    runs-on: ubuntu-22.04
     
-    # 1. FIXED: Added write permissions so GitHub can update your repo files
     permissions:
       contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          ref: master
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -33,7 +35,6 @@ jobs:
         run: python extractor.py
 
       - name: Commit CSV to repo
-        # 2. FIXED: Wrapped commit in a safety check and targeted your master branch
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
