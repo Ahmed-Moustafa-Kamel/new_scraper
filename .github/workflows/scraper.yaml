@@ -2,44 +2,37 @@ name: News Scraper
 
 on:
   schedule:
-    - cron: '0 6 * * *'    # every day at 6am UTC = 8am Cairo
-    - cron: '0 14 * * *'   # every day at 2pm UTC = 4pm Cairo
-  workflow_dispatch:         # manual trigger from GitHub UI
+    - cron: '0 6 * * *'    # 8:00 AM Cairo Time
+    - cron: '0 14 * * *'   # 4:00 PM Cairo Time
+  workflow_dispatch: 
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 120     # stop after 2 hours max
+    timeout-minutes: 120 
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Cache pip packages
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright playwright-stealth pandas requests beautifulsoup4 readability-lxml chardet python-dateutil lxml
 
       - name: Install Playwright browsers
         run: |
-          playwright install chromium
-          playwright install-deps chromium || true
-          sudo apt-get install -y libasound2t64 || true
+          python -m playwright install chromium --with-deps
 
       - name: Run extractor
         env:
-          SCRAPER_WORKERS: "3"
           EXTRACTOR_WORKERS: "10"
-          FILTER_DAYS: "30"
           OUTPUT_FILE: "articles.csv"
         run: python extractor.py
 
