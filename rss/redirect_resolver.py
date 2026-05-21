@@ -10,9 +10,6 @@ from urllib3.util.retry import Retry
 from readability import Document
 from bs4 import BeautifulSoup
 
-# Change this at the top of your file:
-from playwright_stealth import stealth_sync
-from playwright_stealth import stealth
 from playwright.async_api import async_playwright
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -173,21 +170,31 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
     BLOCKED_ASSETS = ["image", "media", "font", "stylesheet"]
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        # Native arguments to mimic real user interaction contexts natively
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
+        )
         context = await browser.new_context(
             ignore_https_errors=True,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 720}
         )
+        
+        # Explicitly script out the navigator.webdriver automation flag natively
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
         semaphore = asyncio.Semaphore(max_concurrent)
 
         async def worker(i, row):
             async with semaphore:
                 page = await context.new_page()
                 
-                # Apply stealth configurations safely
-                stealth_sync(page)
-                
-                # Block structural visual noise
+                # Block tracking and layout-heavy media assets
                 await page.route("**/*", lambda route: route.abort() if route.request.resource_type in BLOCKED_ASSETS else route.continue_())
                 
                 try:
@@ -209,7 +216,7 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
         await context.close()
         await browser.close()
 
-    # Safely align results back into the source dataframe structure
+    # Align processing data back into the original dataframe structure
     for i, update in enumerate(results):
         if update:
             for col, val in update.items():
