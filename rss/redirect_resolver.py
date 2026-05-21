@@ -9,13 +9,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from readability import Document
 from bs4 import BeautifulSoup
-# Change this at the top of rss/redirect_resolver.py:
+
 from playwright_stealth import stealth
-
-# ... keep everything else identical until you hit the worker function below ...
-
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -137,9 +133,7 @@ def _extract_from_url(url: str) -> dict:
 
 async def _resolve_url(page, google_url: str) -> str:
     """Navigate the Google redirect and cleanly return the real article URL."""
-    # Instantly trigger as soon as structural elements land
     await page.goto(google_url, wait_until="domcontentloaded", timeout=15000)
-    # Grab the true target URL string immediately without hanging on missing elements
     return page.url
 
 
@@ -154,7 +148,6 @@ async def _process_row(page, row: dict) -> dict:
             "error": f"Redirect navigation phase timeout: {exc}",
         }
 
-    # If it is an identity link, extract immediately
     try:
         loop = asyncio.get_event_loop()
         extracted = await loop.run_in_executor(None, _extract_from_url, real_url)
@@ -185,11 +178,11 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
         )
         semaphore = asyncio.Semaphore(max_concurrent)
 
-       async def worker(i, row):
+        async def worker(i, row):
             async with semaphore:
                 page = await context.new_page()
                 
-                # FIX HERE: Await the standard stealth function
+                # Apply stealth configurations safely
                 await stealth(page)
                 
                 # Block structural visual noise
@@ -201,12 +194,18 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
                     words = result.get("word_count") or 0
                     print(f"  {status} [{i+1}/{total}] {words:>5} words extracted → {result['url'][:60]}")
                     results[i] = result
+                except Exception as worker_exc:
+                    results[i] = {
+                        "url": row["url"], "word_count": None, "text": "",
+                        "extracted_at": datetime.now(timezone.utc).isoformat(),
+                        "error": f"Worker level catastrophic failure: {worker_exc}",
+                    }
                 finally:
                     await page.close()
 
         await asyncio.gather(*[worker(i, row) for i, row in enumerate(rows)])
         await context.close()
-        browser.close()
+        await browser.close()
 
     # Safely align results back into the source dataframe structure
     for i, update in enumerate(results):
