@@ -10,6 +10,8 @@ from urllib3.util.retry import Retry
 from readability import Document
 from bs4 import BeautifulSoup
 
+# Change this at the top of your file:
+from playwright_stealth import stealth_sync
 from playwright_stealth import stealth
 from playwright.async_api import async_playwright
 
@@ -183,7 +185,7 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
                 page = await context.new_page()
                 
                 # Apply stealth configurations safely
-                await stealth(page)
+                stealth_sync(page)
                 
                 # Block structural visual noise
                 await page.route("**/*", lambda route: route.abort() if route.request.resource_type in BLOCKED_ASSETS else route.continue_())
