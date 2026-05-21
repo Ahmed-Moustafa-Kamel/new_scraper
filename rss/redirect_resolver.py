@@ -128,49 +128,66 @@ def _extract_from_url(url: str) -> dict:
     }
 
 # ==========================================
-# Async Playwright Link Resolution Pipeline
+# Native Memory Protocol Link Decryption
 # ==========================================
 
-async def _resolve_url(page, google_url: str) -> str:
-    """Bypass the 400 Malformed Request screen by pulling target anchor nodes via browser engine."""
+def _decode_google_news_url(google_url: str) -> str:
+    """Extract and parse target URL directly out of base64 tracking tokens without making network requests."""
     try:
-        # Load URL and wait for DOM tree structures to arrive
-        await page.goto(google_url, wait_until="domcontentloaded", timeout=15000)
+        if "news.google.com" not in google_url or "/articles/" not in google_url:
+            return google_url
+            
+        # Isolate the encoded block token string
+        token = google_url.split("/articles/")[-1].split("?")[0]
         
-        # Give potential Javascript-based automated redirects a brief execution window
-        await page.wait_for_timeout(1200)
+        # Clean up padding bits
+        padding = len(token) % 4
+        if padding:
+            token += "=" * (4 - padding)
+            
+        # Unpack binary data layout
+        decoded_bytes = base64.b64decode(token)
         
+        # Pull clean URLs using regex to match protocol signatures
+        match = re.search(rb'https?://[^\x00-\x1f\x7f-\xff]+', decoded_bytes)
+        if match:
+            url = match.group(0).decode('utf-8', errors='ignore')
+            # Strip trailing binary metadata artifacts
+            url = re.split(r'[\xaa\xd2\x01\x00\x08\x12]', url)[0]
+            return url
+    except Exception:
+        pass
+    return google_url
+
+
+async def _resolve_url(page, google_url: str) -> str:
+    """Resolve URL using in-memory token decryption, falling back to browser navigation."""
+    # Try the in-memory decoder first
+    decoded_url = _decode_google_news_url(google_url)
+    if decoded_url != google_url and "google.com" not in decoded_url:
+        return decoded_url
+
+    # Fallback to browser execution if the token format isn't matched
+    try:
+        await page.goto(google_url, wait_until="domcontentloaded", timeout=12000)
+        await page.wait_for_timeout(800)
         current_url = page.url
-        # If the driver successfully redirected out of google.com, return it immediately
         if "news.google.com" not in current_url:
             return current_url
             
-        # --- Bypassing the '400. That’s an error' or Consent Wrapper ---
-        # Search the document body layout for explicit outbound link components
-        link_element = await page.query_selector("main a, div a[href^='http'], a[data-n-au]")
-        if link_element:
-            target_url = await link_element.get_attribute("href")
-            if target_url and "google.com" not in target_url:
-                return target_url
-
-        # Javascript evaluator fallback: iterate all document nodes directly inside the page context
         target_url = await page.evaluate("""() => {
             const anchors = Array.from(document.querySelectorAll('a'));
             for (const a of anchors) {
-                if (a.href && !a.href.includes('google.com')) {
-                    return a.href;
-                }
+                if (a.href && !a.href.includes('google.com')) return a.href;
             }
             return null;
         }""")
-        
         if target_url:
             return target_url
-
     except Exception:
         pass 
 
-    return page.url
+    return google_url
 
 
 async def _process_row(page, row: dict) -> dict:
@@ -184,7 +201,6 @@ async def _process_row(page, row: dict) -> dict:
         }
 
     try:
-        # Pass off the clean URL to the synchronous Requests/BeautifulSoup worker pooling frame
         loop = asyncio.get_event_loop()
         extracted = await loop.run_in_executor(None, _extract_from_url, real_url)
         return {"url": real_url, **extracted}
@@ -221,7 +237,6 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
             viewport={"width": 1280, "height": 720}
         )
         
-        # Scrub automation signatures
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -229,8 +244,6 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
         async def worker(i, row):
             async with semaphore:
                 page = await context.new_page()
-                
-                # Performance opt: Abort visual asset downloads to speed up execution loops
                 await page.route("**/*", lambda route: route.abort() if route.request.resource_type in BLOCKED_ASSETS else route.continue_())
                 
                 try:
@@ -252,7 +265,6 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
         await context.close()
         await browser.close()
 
-    # Synchronize output results array back onto your primary pipeline's Pandas DataFrame object
     for i, update in enumerate(results):
         if update:
             for col, val in update.items():
