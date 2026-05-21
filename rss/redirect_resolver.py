@@ -15,9 +15,9 @@ from playwright.async_api import async_playwright
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ===============================
-# HTTP Session 
-# ===============================
+# ==========================================
+# HTTP Session Config for Content Extraction
+# ==========================================
 
 def _make_session() -> requests.Session:
     session = requests.Session()
@@ -38,9 +38,9 @@ def _make_session() -> requests.Session:
 
 SESSION = _make_session()
 
-# ===============================
-# Helpers
-# ===============================
+# ==========================================
+# Text Cleaning & Normalization Helpers
+# ==========================================
 
 def clean_arabic(text: str) -> str:
     if not text:
@@ -75,17 +75,17 @@ def _get_meta(soup: BeautifulSoup, *names) -> str:
             return tag["content"].strip()
     return ""
 
-# ===============================
-# Core extractor 
-# ===============================
+# ==========================================
+# Core HTML Content Parser Engine
+# ==========================================
 
 def _extract_from_url(url: str) -> dict:
-    """Fetch and extract article text using requests + readability + BS4."""
+    """Fetch and parse structural article body text using requests + readability."""
     try:
         response = SESSION.get(url, timeout=12, verify=False)
         response.raise_for_status()
     except Exception as exc:
-        raise ValueError(f"Network processing block dropped: {exc}")
+        raise ValueError(f"Target publisher network processing block dropped: {exc}")
 
     declared = response.encoding or ""
     if not declared or declared.lower() in ("iso-8859-1", "latin-1"):
@@ -127,41 +127,53 @@ def _extract_from_url(url: str) -> dict:
         "error": "",
     }
 
-# ===============================
-# Async pipeline
-# ===============================
+# ==========================================
+# Async Playwright Link Resolution Pipeline
+# ==========================================
 
 async def _resolve_url(page, google_url: str) -> str:
-    """Extract and decode the destination article URL natively out of the Google RSS tracking string."""
+    """Bypass the 400 Malformed Request screen by pulling target anchor nodes via browser engine."""
     try:
-        if "news.google.com" in google_url and "/articles/" in google_url:
-            # Isolate the base64 string component
-            encoded_part = google_url.split("/articles/")[-1].split("?")[0]
+        # Load URL and wait for DOM tree structures to arrive
+        await page.goto(google_url, wait_until="domcontentloaded", timeout=15000)
+        
+        # Give potential Javascript-based automated redirects a brief execution window
+        await page.wait_for_timeout(1200)
+        
+        current_url = page.url
+        # If the driver successfully redirected out of google.com, return it immediately
+        if "news.google.com" not in current_url:
+            return current_url
             
-            # Pad the string to avoid padding errors during decryption
-            padding = len(encoded_part) % 4
-            if padding:
-                encoded_part += "=" * (4 - padding)
-                
-            decoded_bytes = base64.b64decode(encoded_part)
-            
-            # Locate valid HTTP schemas inside the binary protocol stream
-            match = re.search(rb'https?://[^\x00-\x1f\x7f-\xff]+', decoded_bytes)
-            if match:
-                real_url = match.group(0).decode('utf-8', errors='ignore')
-                # Prune protocol delimiter noise bytes
-                real_url = re.split(r'[\xaa\xd2\x01\x00]', real_url)[0]
-                return real_url
-    except Exception:
-        pass
+        # --- Bypassing the '400. That’s an error' or Consent Wrapper ---
+        # Search the document body layout for explicit outbound link components
+        link_element = await page.query_selector("main a, div a[href^='http'], a[data-n-au]")
+        if link_element:
+            target_url = await link_element.get_attribute("href")
+            if target_url and "google.com" not in target_url:
+                return target_url
 
-    # Fallback to manual navigation if structural matching misses
-    await page.goto(google_url, wait_until="domcontentloaded", timeout=15000)
+        # Javascript evaluator fallback: iterate all document nodes directly inside the page context
+        target_url = await page.evaluate("""() => {
+            const anchors = Array.from(document.querySelectorAll('a'));
+            for (const a of anchors) {
+                if (a.href && !a.href.includes('google.com')) {
+                    return a.href;
+                }
+            }
+            return null;
+        }""")
+        
+        if target_url:
+            return target_url
+
+    except Exception:
+        pass 
+
     return page.url
 
 
 async def _process_row(page, row: dict) -> dict:
-    real_url = row["url"]
     try:
         real_url = await _resolve_url(page, row["url"])
     except Exception as exc:
@@ -172,6 +184,7 @@ async def _process_row(page, row: dict) -> dict:
         }
 
     try:
+        # Pass off the clean URL to the synchronous Requests/BeautifulSoup worker pooling frame
         loop = asyncio.get_event_loop()
         extracted = await loop.run_in_executor(None, _extract_from_url, real_url)
         return {"url": real_url, **extracted}
@@ -208,7 +221,7 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
             viewport={"width": 1280, "height": 720}
         )
         
-        # Strip automation indicators
+        # Scrub automation signatures
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -217,7 +230,7 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
             async with semaphore:
                 page = await context.new_page()
                 
-                # Prevent massive rendering slowdowns by dropping assets
+                # Performance opt: Abort visual asset downloads to speed up execution loops
                 await page.route("**/*", lambda route: route.abort() if route.request.resource_type in BLOCKED_ASSETS else route.continue_())
                 
                 try:
@@ -239,7 +252,7 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
         await context.close()
         await browser.close()
 
-    # Write aligned data back to the primary pipeline DataFrame object
+    # Synchronize output results array back onto your primary pipeline's Pandas DataFrame object
     for i, update in enumerate(results):
         if update:
             for col, val in update.items():
@@ -249,5 +262,5 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
 
 
 def resolve_and_extract(df, max_concurrent: int = 5):
-    """Sync runtime entrypoint safe from nested loop exceptions."""
+    """Sync runtime entrypoint safe from nested loop thread exceptions."""
     return asyncio.run(resolve_and_extract_async(df, max_concurrent=max_concurrent))
