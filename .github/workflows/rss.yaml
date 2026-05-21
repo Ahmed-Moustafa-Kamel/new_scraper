@@ -38,7 +38,7 @@ jobs:
     - name: Execute Scraper Pipeline
       run: |
         # We invoke main as a module (-m) so it resolves relative imports correctly
-        python -m rss.main_rss
+        python -m scraper.main
 
     - name: Commit and Push output CSV data
       run: |
