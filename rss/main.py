@@ -1,5 +1,5 @@
-from .rss_fetcher import fetch_all
-from .redirect_resolver import resolve_and_extract
+from rss.rss_fetcher import fetch_all
+from rss.redirect_resolver import resolve_and_extract
 
 if __name__ == "__main__":
     queries = [

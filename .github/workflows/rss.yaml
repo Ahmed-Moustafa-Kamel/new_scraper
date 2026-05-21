@@ -37,8 +37,9 @@ jobs:
 
     - name: Execute rss Pipeline
       run: |
-        # We invoke main as a module (-m) so it resolves relative imports correctly
-        python -m rss.main.py
+        # Append the current workspace root directory to PYTHONPATH
+        export PYTHONPATH=$PYTHONPATH:$(pwd)
+        python rss/main.py
 
     - name: Commit and Push output CSV data
       run: |

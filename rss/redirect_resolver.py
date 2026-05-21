@@ -9,6 +9,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from readability import Document
 from bs4 import BeautifulSoup
+# Change this at the top of rss/redirect_resolver.py:
+from playwright_stealth import stealth
+
+# ... keep everything else identical until you hit the worker function below ...
 
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
@@ -181,11 +185,12 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
         )
         semaphore = asyncio.Semaphore(max_concurrent)
 
-        async def worker(i, row):
+       async def worker(i, row):
             async with semaphore:
                 page = await context.new_page()
-                # Apply stealth configurations safely to our active async context
-                await stealth_async(page)
+                
+                # FIX HERE: Await the standard stealth function
+                await stealth(page)
                 
                 # Block structural visual noise
                 await page.route("**/*", lambda route: route.abort() if route.request.resource_type in BLOCKED_ASSETS else route.continue_())
