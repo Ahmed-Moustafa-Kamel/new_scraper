@@ -2,6 +2,7 @@ import asyncio
 import re
 import chardet
 import urllib3
+import base64
 from datetime import datetime, timezone
 
 import requests
@@ -131,7 +132,30 @@ def _extract_from_url(url: str) -> dict:
 # ===============================
 
 async def _resolve_url(page, google_url: str) -> str:
-    """Navigate the Google redirect and cleanly return the real article URL."""
+    """Extract and decode the destination article URL natively out of the Google RSS tracking string."""
+    try:
+        if "news.google.com" in google_url and "/articles/" in google_url:
+            # Isolate the base64 string component
+            encoded_part = google_url.split("/articles/")[-1].split("?")[0]
+            
+            # Pad the string to avoid padding errors during decryption
+            padding = len(encoded_part) % 4
+            if padding:
+                encoded_part += "=" * (4 - padding)
+                
+            decoded_bytes = base64.b64decode(encoded_part)
+            
+            # Locate valid HTTP schemas inside the binary protocol stream
+            match = re.search(rb'https?://[^\x00-\x1f\x7f-\xff]+', decoded_bytes)
+            if match:
+                real_url = match.group(0).decode('utf-8', errors='ignore')
+                # Prune protocol delimiter noise bytes
+                real_url = re.split(r'[\xaa\xd2\x01\x00]', real_url)[0]
+                return real_url
+    except Exception:
+        pass
+
+    # Fallback to manual navigation if structural matching misses
     await page.goto(google_url, wait_until="domcontentloaded", timeout=15000)
     return page.url
 
@@ -170,7 +194,6 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
     BLOCKED_ASSETS = ["image", "media", "font", "stylesheet"]
 
     async with async_playwright() as p:
-        # Native arguments to mimic real user interaction contexts natively
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -185,7 +208,7 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
             viewport={"width": 1280, "height": 720}
         )
         
-        # Explicitly script out the navigator.webdriver automation flag natively
+        # Strip automation indicators
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -194,7 +217,7 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
             async with semaphore:
                 page = await context.new_page()
                 
-                # Block tracking and layout-heavy media assets
+                # Prevent massive rendering slowdowns by dropping assets
                 await page.route("**/*", lambda route: route.abort() if route.request.resource_type in BLOCKED_ASSETS else route.continue_())
                 
                 try:
@@ -216,7 +239,7 @@ async def resolve_and_extract_async(df, max_concurrent: int = 5):
         await context.close()
         await browser.close()
 
-    # Align processing data back into the original dataframe structure
+    # Write aligned data back to the primary pipeline DataFrame object
     for i, update in enumerate(results):
         if update:
             for col, val in update.items():
